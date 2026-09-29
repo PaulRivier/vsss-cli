@@ -4,11 +4,11 @@
 //!   - Shamir Secret Scheme (no Feldman - Pedersen),
 //!   - only for "bytes array" (`Gf256::split_bytes` / `Gf256::combine_bytes`),
 //!
-//! Parts files are exactly byte arrays produced by `vsss-rs` (1 byte
+//! Shares files are exactly byte arrays produced by `vsss-rs` (1 byte
 //! for X coordinate followed by N bytes of Y coordinates).
 //!
 //! Users should note parameters used to ensure proper reconstruction.
-//! Also, part format is non standardized binary output, with no
+//! Also, share format is non standardized binary output, with no
 //! guarantee it will remain as such for ever. User should save the
 //! code used for splitting to ensure proper combination in the
 //! future.
@@ -26,8 +26,8 @@ use rand::rngs::SysRng;
 use rand::rand_core::UnwrapErr;
 
 
-/// part file name
-const PART_FILE_NAME: &str = "SECRET_SHARE";
+/// share file name
+const SHARE_FILE_NAME: &str = "SECRET_SHARE";
 
 #[derive(Parser)]
 #[command(
@@ -42,36 +42,36 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Découpe SECRET en N parts, dont K suffisent à le reconstituer.
+    /// Split SECRET into N shares, with K shares required to combine back.
     Split {
-        /// Fichier binaire contenant le secret à protéger (SECRET_PATH) ou "-" pour STDIN.
+        /// File path holding the secret content (use "-" for STDIN)
         #[arg(long, short = 's')]
         secret_path: PathBuf,
 
-        /// Seuil K : nombre de parts requises pour reconstituer le secret.
+        /// Threshold K : number of shares required to combine back
         #[arg(long, short = 't', value_name = "K")]
         threshold: u8,
 
-        /// Nombre total N de parts à générer.
+        /// Total number of shares to produce (< 256)
         #[arg(long, short = 'n', value_name = "N")]
         shares: u8,
 
-        /// Dossier de sortie où écrire SECRET.PART.1 … SECRET.PART.N.
+        /// Shares output folder
         #[arg(long, short = 'd', value_name = "DIR")]
-        parts_dir: PathBuf,
+        shares_dir: PathBuf,
     },
 
-    /// Recombine un secret à partir d'un ensemble de parts.
+    /// Combine shares back to reveal the secret.
     Combine {
-        /// Dossier contenant les fichiers *.PART.<n> à utiliser.
-        #[arg(long, short = 'd', value_name = "DIR", conflicts_with = "part")]
-        parts_dir: Option<PathBuf>,
+        /// A directory with enough shares (more than the threshold) to rebuild the secret
+        #[arg(long, short = 'd', value_name = "DIR", conflicts_with = "share")]
+        shares_dir: Option<PathBuf>,
 
-        /// Fichier de part à utiliser (répétable). Alternative à --parts-dir.
-        #[arg(long, short = 'p', value_name = "FILE", conflicts_with = "parts_dir")]
-        part: Vec<PathBuf>,
+        /// Repeatable switch, use it to explicitely specify share files one after the other
+        #[arg(long, short = 'p', value_name = "FILE", conflicts_with = "shares_dir")]
+        share: Vec<PathBuf>,
 
-        /// Fichier de sortie dans lequel écrire le secret reconstitué.
+        /// File to output to combined secret to (use "-" for STDOUT)
         #[arg(long, short = 'o', value_name = "FILE")]
         output: PathBuf,
     },
@@ -92,13 +92,13 @@ fn run(cli: Cli) -> Result<(), String> {
             secret_path,
             threshold,
             shares,
-            parts_dir,
-        } => split(&secret_path, threshold, shares, &parts_dir),
+            shares_dir,
+        } => split(&secret_path, threshold, shares, &shares_dir),
         Command::Combine {
-            parts_dir,
-            part,
+            shares_dir,
+            share,
             output,
-        } => combine(parts_dir, part, &output),
+        } => combine(shares_dir, share, &output),
     }
 }
 
@@ -106,46 +106,44 @@ fn run(cli: Cli) -> Result<(), String> {
 // split
 // ---------------------------------------------------------------------
 
-fn split(secret_path: &Path, threshold: u8, shares: u8, parts_dir: &Path) -> Result<(), String> {
+fn split(secret_path: &Path, threshold: u8, shares_count: u8, shares_dir: &Path) -> Result<(), String> {
     if threshold < 2 {
         return Err("--threshold must be >= 2".into());
     }
-    if shares < threshold {
+    if shares_count < threshold {
         return Err("--shares must be >= --threshold".into());
     }
 
-    // let secret_bytes = fs::read(secret_path)
-    //     .map_err(|e| format!("Unable to read {} : {e}", secret_path.display()))?;
     let secret_bytes = read_secret(secret_path)?;
 
     if secret_bytes.is_empty() {
         return Err(format!("{} is empty", secret_path.display()));
     }
 
-    fs::create_dir_all(parts_dir)
-        .map_err(|e| format!("unable to mkdir {}: {e}", parts_dir.display()))?;
+    fs::create_dir_all(shares_dir)
+        .map_err(|e| format!("unable to mkdir {}: {e}", shares_dir.display()))?;
 
     // SysRng est la source d'entropie du noyau,
     // UnwrapErr le rend compatible avec l'API CryptoRng attendue.
     let mut sys_rng = UnwrapErr(SysRng);
 
     // Coeur de la lib : découpe le secret octet par octet sur GF(256).
-    // Chaque élément renvoyé est une part
+    // Chaque élément renvoyé est une share
     // (1 octet de X + N octets de valeurs Y).
-    let parts = Gf256::split_bytes(threshold as usize, shares as usize, &secret_bytes, &mut sys_rng)
+    let shares = Gf256::split_bytes(threshold as usize, shares_count as usize, &secret_bytes, &mut sys_rng)
         .map_err(|e| format!("unable to split: {e}"))?;
 
-    for (i, part) in parts.iter().enumerate() {
-        let part_number = i + 1;
-        let file_name = format!("{PART_FILE_NAME}.{part_number}");
-        let part_path = parts_dir.join(file_name);
-        write_private_file(&part_path, part)
-            .map_err(|e| format!("unable to write {}: {e}", part_path.display()))?;
+    for (i, share) in shares.iter().enumerate() {
+        let share_number = i + 1;
+        let file_name = format!("{SHARE_FILE_NAME}.{share_number}");
+        let share_path = shares_dir.join(file_name);
+        write_private_file(&share_path, share)
+            .map_err(|e| format!("unable to write {}: {e}", share_path.display()))?;
     }
 
     eprintln!(
-        "{shares} shares written to {}  /  Min combine threshold: {threshold}",
-        parts_dir.display()
+        "{shares_count} shares written to {}  /  Min combine threshold: {threshold}",
+        shares_dir.display()
     );
     Ok(())
 }
@@ -154,20 +152,20 @@ fn split(secret_path: &Path, threshold: u8, shares: u8, parts_dir: &Path) -> Res
 // combine
 // ---------------------------------------------------------------------
 
-fn combine(parts_dir: Option<PathBuf>, explicit_parts: Vec<PathBuf>, output_path: &Path) -> Result<(), String> {
-    let part_paths = if !explicit_parts.is_empty() {
-        explicit_parts
-    } else if let Some(dir) = parts_dir {
-        collect_part_files(&dir)?
+fn combine(shares_dir: Option<PathBuf>, explicit_shares: Vec<PathBuf>, output_path: &Path) -> Result<(), String> {
+    let share_paths = if !explicit_shares.is_empty() {
+        explicit_shares
+    } else if let Some(dir) = shares_dir {
+        collect_share_files(&dir)?
     } else {
-        return Err("provide a correct --parts-dir <DIR> or at least two --part <FILE>".into());
+        return Err("provide a correct --shares-dir <DIR> or at least two --share <FILE>".into());
     };
 
-    if part_paths.len() < 2 {
+    if share_paths.len() < 2 {
         return Err("at least two shares are required for combine".into());
     }
 
-    let parts: Vec<Vec<u8>> = part_paths
+    let shares: Vec<Vec<u8>> = share_paths
         .iter()
         .map(|p| fs::read(p).map_err(|e| format!("unable to read {}: {e}", p.display())))
         .collect::<Result<_, _>>()?;
@@ -177,25 +175,22 @@ fn combine(parts_dir: Option<PathBuf>, explicit_parts: Vec<PathBuf>, output_path
     // résultat faux. Rien dans le format des parts ne contient cette
     // information ; c'est à l'appelant de fournir au moins K parts
     // valides.
-    let secret = Gf256::combine_bytes(&parts).map_err(|e| format!("unable to combine: {e}"))?;
+    let secret = Gf256::combine_bytes(&shares).map_err(|e| format!("unable to combine: {e}"))?;
 
     write_secret_output(output_path, &secret)?;
-
-    // write_private_file(output_path, &secret)
-    //     .map_err(|e| format!("unable to write to {}: {e}", output_path.display()))?;
 
     eprintln!(
 "************************************************************
 * secret successfully written to {} from {} shares
 ************************************************************",
         output_path.display(),
-        part_paths.len()
+        share_paths.len()
     );
     Ok(())
 }
 
 /// Liste les fichiers du dossier
-fn collect_part_files(dir: &Path) -> Result<Vec<PathBuf>, String> {
+fn collect_share_files(dir: &Path) -> Result<Vec<PathBuf>, String> {
     Ok(fs::read_dir(dir)
        .map_err(|e| format!("unable to read {}: {e}", dir.display()))?
        .filter_map(Result::ok)
