@@ -42,3 +42,11 @@ software-dependent.
 ## Contributing
 
 Help, bug reports and PR welcome.
+
+
+## See also
+
+Other notable (and incompatible) implementations :
+
+- [allensarkisyan/shamir_zero](https://github.com/allensarkisyan/shamir_zero)
+- [Banana Split](https://bs.parity.io/)
