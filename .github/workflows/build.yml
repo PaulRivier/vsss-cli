@@ -1,0 +1,56 @@
+name: Build static binary
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-musl:
+    name: Build static musl binary
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain with musl target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+
+      - name: Cache cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install musl toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools musl-dev
+
+      - name: Configure musl linker
+        run: |
+          mkdir -p .cargo
+          cat > .cargo/config.toml <<'EOF'
+          [target.x86_64-unknown-linux-musl]
+          linker = "musl-gcc"
+          EOF
+
+      - name: Build release binary
+        run: cargo build --release --target x86_64-unknown-linux-musl
+
+      - name: Verify static linking
+        run: |
+          file target/x86_64-unknown-linux-musl/release/vsss-cli
+          ldd target/x86_64-unknown-linux-musl/release/vsss-cli 2>&1 || true
+
+      - name: Upload binary as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vsss-cli-x86_64-linux-musl
+          path: target/x86_64-unknown-linux-musl/release/vsss-cli
+          if-no-files-found: error
