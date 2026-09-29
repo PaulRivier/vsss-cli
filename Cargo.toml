@@ -1,0 +1,22 @@
+[package]
+name = "vsss-cli"
+version = "0.1.0"
+edition = "2024"
+description = "CLI de partage et recombinaison de secrets (Shamir, GF(256), bytes) basée sur vsss-rs"
+
+[dependencies]
+# API "bytes array" de Shamir (Gf256::split_bytes / combine_bytes) -> nécessite std.
+vsss-rs = { version = "6", features = ["std"] }
+# Générateur d'aléa cryptographique (OsRng) utilisé pour le split.
+rand = { version = "0.10", features = ["sys_rng"] }
+# Parsing de la ligne de commande.
+clap = { version = "4", features = ["derive"] }
+
+
+# Profil pensé pour produire un binaire statique musl compact.
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
